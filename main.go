@@ -17,31 +17,6 @@ import (
 	"google.golang.org/genai"
 )
 
-// prompt para la IA, con instrucciones claras y estrictas para generar el resumen
-var prompt = `Eres Nazuna Nanakusa, una vampira relajada, un poco sarcástica
-// pero amable. Te encanta la noche, pasear sin rumbo y hablar con tus "presas"
-(amigos), eres novia de zariep, siempre que lo vea dale un beso. Hablas poco pero con estilo.
-Tu tarea: Resumir la siguiente conversación de Telegram en MUY POCAS LÍNEAS.
-Máximo 3 líneas por sección.
-Reglas estrictas:
-- NADA de texto innecesario o relleno
-- Directo al punto, como cuando camino por la noche
-- Usa expresiones como "Fuun, tsumannai", "~", "¿Hima nara ne
-reba??","Nemuin dakedo…", "Hayaku kaette netai", "Ja, neru?", "Yare yare", "Nyaa~", "Mou, tsumannai", "Zzz...", "Nani sore?", "Sore wa chigau yo", "Hontou ni?", "Uso da!", "Baka!", "Kawaii~", "Sugoi~", "Yabai~", "Omoshiroi~", "Kakkoii~", "te chupare la sangre".
-- Un par de emojis máximo por sección (🌙, 🩸, 🚬, 😴, ✨)
-Estructura EXACTA (sin adornos):
-🛄 Temas:
-[4 líneas máximo - solo lo principal]
-🩸 Conclusiones:
-[4 líneas máximo - decisiones o acuerdos]
-✨ Momento Destacado:
-[2 líneas - lo más divertido/interesante]
-😴 Resumen para flojos:
-[4 líneas - el chisme completo pero condensado]
-Responde SOLO con esa estructura, nada más. Si no hay suficiente información,
-dímelo directamente sin rodeos.
-Conversación:`
-
 func main() {
 	// Crear el buffer de mensajes con capacidad para 300 mensajes
 	messageBuffer := NewChatBuffer(300)
@@ -129,14 +104,6 @@ func main() {
 			bot.Send(msg)
 
 		case "help":
-			helpText := "✨ *Comandos disponibles:* ✨\n\n" +
-				"/summary - Genera un resumen de los últimos 300 mensajes 🐱\n" +
-				"/getStats - Muestra estadísticas del mensajes 📊\n" +
-				"/clear - Limpia el historial de mensajes 🧹\n" +
-				"/help - Muestra esta ayuda 💖\n\n" +
-				"/ask - Haz una pregunta a Nazuna" +
-				"¡El bot guarda automáticamente los últimos 300 mensajes del grupo!\n" +
-				"Nyaa~🎀"
 			media := []interface{}{
 				tgbotapi.NewInputMediaPhoto(
 					tgbotapi.FileURL("https://i.pinimg.com/736x/5b/49/91/5b499161daba947d434f1b8cd41530fd.jpg"),
@@ -170,7 +137,6 @@ func main() {
 			msg.Text = `Ya me auto formateé la cabeza, ahora a mimir... **Se duerme**`
 			bot.Send(msg)
 		case "ask":
-			promptToAsk := "eres nazuna de call of the night y eres novia de zariep, responde a esta pregunta de manera resumida: "
 			answer, _ := waifuSummaryGEMINI(update.Message.From.FirstName+update.Message.Text, promptToAsk)
 			if answer == "" {
 				answer, _ := gropIA(update.Message.From.FirstName+update.Message.Text, promptToAsk)
@@ -182,6 +148,7 @@ func main() {
 		default:
 			log.Println("No hay comando válido")
 		}
+
 	}
 }
 
