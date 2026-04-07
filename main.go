@@ -78,6 +78,7 @@ func main() {
 		buffersMu.Unlock()
 
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+		msg.ReplyToMessageID = update.Message.MessageID
 
 		// Agregar mensajes e ignorar el comando /summary
 		if update.Message.Text != "/summary" {
@@ -136,6 +137,7 @@ func main() {
 			photo.ParseMode = "Markdown"
 			media[0] = photo
 			mediaGroup := tgbotapi.NewMediaGroup(update.Message.Chat.ID, media)
+			mediaGroup.ReplyToMessageID = update.Message.MessageID
 
 			_, err := bot.SendMediaGroup(mediaGroup)
 			if err != nil {
@@ -160,7 +162,6 @@ func main() {
 			bot.Send(msg)
 		case "ask":
 			input := update.Message.From.FirstName + ": " + update.Message.Text
-
 			// Intento con GEMINI
 			answer, err := waifuSummaryGEMINI(input, promptToAsk)
 			if err != nil {
@@ -176,7 +177,6 @@ func main() {
 
 				if answer == "" {
 					msg.Text = "No hay nada para ver aquí... Fuun, tsumannai..."
-
 					bot.Send(msg)
 					continue
 				}
