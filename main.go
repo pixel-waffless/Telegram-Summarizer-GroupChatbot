@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,7 +88,7 @@ func main() {
 			bufferMenssage.Add(userName, message)
 		}
 
-		command := update.Message.Command()
+		command := strings.ToLower(update.Message.Command())
 
 		if !update.Message.IsCommand() {
 			continue
