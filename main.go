@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,20 +11,30 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 	"google.golang.org/genai"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
+	// initialize database
+	db, err := sql.Open("sqlite", "/app/data/db.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	// Create table database
+	createTable(db)
+
 	// Cargar variables de entorno desde el archivo .env
 	if err := godotenv.Load(); err != nil {
 		log.Println("No se encontró el archivo .env")
-		log.Println("Se usara la variable de entorno")
+		log.Println("Se usará la variable de entorno")
 	} else {
 		log.Println("Archivo .env cargado")
 	}
@@ -36,7 +47,7 @@ func main() {
 		log.Println("El TELEGRAM_BOT_TOKEN no se encontró")
 	}
 
-	log.Println("El TELEGRAM_BOT_TOKEN se cargo")
+	log.Println("El TELEGRAM_BOT_TOKEN se cargó")
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
@@ -51,11 +62,7 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 
-	// Crear buffers separados para cada chat (grupo)
-	chatBuffers := make(map[int64]*ChatBuffer)
-	var buffersMu sync.Mutex
-
-	// Bucle principal del bot para responder
+	// Main bot loop to respond
 	for update := range updates {
 
 		if update.Message == nil {
@@ -68,24 +75,16 @@ func main() {
 			userName = update.Message.From.FirstName
 		}
 
-		// Obtener o crear el buffer para este chat
-		buffersMu.Lock()
-		bufferMenssage, exists := chatBuffers[chatID]
-		if !exists {
-			// Guardar los últimos 100 mensajes por grupo
-			bufferMenssage = NewChatBuffer(100)
-			chatBuffers[chatID] = bufferMenssage
-		}
-		buffersMu.Unlock()
-
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
 		msg.ReplyToMessageID = update.Message.MessageID
 
-		// Agregar mensajes e ignorar el comando /summary
-		if update.Message.Text != "/summary" {
+		// Add messages and ignore /summary command
+		if update.Message.Text != "/summary" && !update.Message.IsCommand() {
 			userName := update.Message.From.FirstName
 			message := update.Message.Text
-			bufferMenssage.Add(userName, message)
+			insertMessage(db, chatID, MessageMember{Name: userName, Message: message})
+			// Automatically check and compress context if necessary
+			go autoCompressContext(db, chatID)
 		}
 
 		command := strings.ToLower(update.Message.Command())
@@ -93,40 +92,68 @@ func main() {
 		if !update.Message.IsCommand() {
 			continue
 		}
-		// Manejar comandos
+		// Handle commands
 		switch command {
 		case "summary":
-			text := bufferMenssage.GetFormattedMessages()
-
-			if text == "" {
+			textMessage := GetFormattedMessages(db, chatID, 300)
+			prompt, err := getPromptBase(db, chatID)
+			if err != nil {
+				log.Printf("Error al obtener el prompt base: %v", err)
+				prompt = "Eres un asistente que resume conversaciones de Telegram de forma breve y concisa. Resumes la conversación sin omitir detalles importantes, pero sin ser demasiado extenso. El resumen debe ser fácil de leer y entender."
+			}
+			// Add context from last summary
+			lastSummary, err := getLastSummary(db, chatID)
+			if err == nil && lastSummary != "" {
+				prompt += "\nPrevious conversation context: " + lastSummary
+			}
+			// Add compressed context if exists
+			compressedCtx, err := getCompressedContext(db, chatID)
+			if err == nil && compressedCtx != "" {
+				prompt += "\nCompressed context from previous conversations:\n" + compressedCtx
+			}
+			if textMessage == "" {
 				msg.Text = "Eh no hay mensajes que resumir..."
 				bot.Send(msg)
 				continue
 			}
 
-			// Intento con GEMINI
-			summary, err := waifuSummaryGEMINI(text, prompt)
+			// Try with GEMINI
+			summary, err := waifuSummaryGEMINI(textMessage, prompt)
 			if err != nil {
-				log.Printf("Error con GEMINI: %v", err)
+				log.Printf("Error with GEMINI: %v", err)
 			}
 
-			// Si falla o viene vacío, intento con GROP
+			// If fails or empty, try with GROQ
 			if summary == "" {
-				summary, err = gropIA(text, prompt)
+				summary, err = groqIA(textMessage, prompt)
 				if err != nil {
-					log.Printf("Error con GROP: %v", err)
+					log.Printf("Error with GROQ: %v", err)
 				}
 
 				if summary == "" {
-					msg.Text = "Eh, no quiero resumir nada largate. **Se duerme**."
-					bot.Send(msg)
-					continue
+					summary, err = waifuSummaryGIPITI(textMessage, prompt)
+					if err != nil {
+						msg.Text = "Eh, no quiero resumir nada largarte. **Se duerme**."
+						bot.Send(msg)
+						continue
+					}
+					if summary == "" {
+						msg.Text = "No hay nada para ver aquí... Fuun, tsumannai..."
+						bot.Send(msg)
+						continue
+
+					}
+
 				}
 			}
 
 			msg.Text = summary
 			msg.ParseMode = ""
 			bot.Send(msg)
+			// Save summary for future context
+			insertSummary(db, chatID, summary)
+			// Clear messages after summary
+			Clear(db, chatID)
 		case "help":
 			media := []interface{}{
 				tgbotapi.NewInputMediaPhoto(
@@ -151,29 +178,54 @@ func main() {
 			}
 
 		case "getstats":
-			if bufferMenssage.GetStats() == "" {
-				msg.Text = "No hay nada para ver aquí... Fuun, tsumannai..."
-			}
-			msg.Text = bufferMenssage.GetStats()
-			msg.ParseMode = ""
+			stats, _ := GetStats(db, chatID)
+			msg.Text = stats
+			msg.ParseMode = "Markdown"
 			bot.Send(msg)
 		case "clear":
-			bufferMenssage.Clear()
+			Clear(db, chatID)
 			msg.Text = `Ya me auto formateé la cabeza, ahora a mimir... **Se duerme**`
 			bot.Send(msg)
+		case "promptbase":
+			if update.Message.From.ID != 7046723187 {
+				msg.Text = "No tienes permiso para usar este comando"
+				bot.Send(msg)
+				continue
+			}
+			insertPromptBase(db, chatID, update.Message.Text)
+			msg.Text = "Prompt guardado con éxito"
+			msg.ParseMode = ""
+			bot.Send(msg)
 		case "ask":
-			input := update.Message.From.FirstName + ": " + update.Message.Text
+			// Remove command from text
+			commandText := "/" + update.Message.Command()
+			inputText := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, commandText))
+			input := update.Message.From.FirstName + ": " + inputText
+			prompt, err := getPromptBase(db, chatID)
+			textContext := GetFormattedMessages(db, chatID, 50)
+			if err != nil {
+				log.Printf("Error al obtener el prompt base: %v", err)
+				prompt = "Eres un asistente que responde preguntas de forma breve y concisa. Respondes sin omitir detalles importantes, pero sin ser demasiado extenso. El resumen debe ser fácil de leer y entender."
+			}
+			// Agregar contexto comprimido si existe
+			compressedCtx, err := getCompressedContext(db, chatID)
+			if err == nil && compressedCtx != "" {
+				textContext = "Contexto comprimido:\n" + compressedCtx + "\n\nMensajes recientes:\n" + textContext
+			}
+			prompt += "\nEn esto se basa tu personalidad:" + prompt + "este es el contexto del chat no tienes que responder " + textContext + "a esto en base a lo anterior responde a pregunta de manera resumida: "
+
 			// Intento con GEMINI
-			answer, err := waifuSummaryGEMINI(input, promptToAsk)
+			answer, err := waifuSummaryGEMINI(input, prompt)
 			if err != nil {
 				log.Printf("Error con GEMINI: %v", err)
 			}
 
-			// Intento a GROP
+			// Intento con GROQ
 			if answer == "" {
-				answer, err = gropIA(input, promptToAsk)
+				answer, err = groqIA(input, prompt)
 				if err != nil {
-					log.Printf("Error con GROP: %v", err)
+					log.Printf("Error con GROQ: %v", err)
+					waifuSummaryGIPITI(input, prompt)
 				}
 
 				if answer == "" {
@@ -192,6 +244,8 @@ func main() {
 
 			msg.ParseMode = ""
 			bot.Send(msg)
+			// Verificar y comprimir contexto automáticamente si es necesario
+			go autoCompressContext(db, chatID)
 		default:
 			log.Println("No hay comando válido")
 		}
@@ -228,25 +282,30 @@ func waifuSummaryGEMINI(message string, prompt string) (string, error) {
 	return result.Text(), nil
 }
 
-// Función para llamar a la API de GIPITI
-func waifuSummaryGIPITI(message string) (string, error) {
+// Función para llamar a la API de VENICE
+func waifuSummaryGIPITI(message string, prompt string) (string, error) {
 	// Verificar que la variable de entorno exista
-	OPENAI_API_KEY := os.Getenv("OPENAI_API_KEY")
-	if OPENAI_API_KEY == "" {
-		log.Println("El OPENAI_API_KEY no se encontró")
+	VENICE_API_KEY := os.Getenv("VENICE_API_KEY")
+	if VENICE_API_KEY == "" {
+		log.Println("El VENICE_API_KEY no se encontró")
 		return "", nil
 	}
 
-	client := openai.NewClient()
-	chatCompletion, err := client.Chat.Completions.New(context.Background(),
+	client := openai.NewClient(
+		option.WithAPIKey(VENICE_API_KEY),
+		option.WithBaseURL("https://api.venice.ai/api/v1"))
 
-		openai.ChatCompletionNewParams{
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.DeveloperMessage(prompt),
-				openai.UserMessage(message),
-			},
-			Model: openai.ChatModelGPT4Turbo,
-		})
+	ctx := context.Background()
+
+	chatCompletion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: *openai.StringPtr("e2ee-gpt-oss-20b-p:include_venice_system_prompt=false"),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(prompt),
+			openai.UserMessage(message),
+		},
+		Temperature: openai.Float(0.7),
+	},
+	)
 
 	if err != nil {
 		log.Printf("Error al generar el resumen con GIPITI: %v", err)
@@ -256,7 +315,7 @@ func waifuSummaryGIPITI(message string) (string, error) {
 	return chatCompletion.Choices[0].Message.Content, nil
 }
 
-func gropIA(message string, prompt string) (string, error) {
+func groqIA(message string, prompt string) (string, error) {
 	BASE_URL := "https://api.groq.com/openai/v1/chat/completions"
 	GROQ_API_KEY := os.Getenv("GROQ_API_KEY")
 
@@ -267,8 +326,11 @@ func gropIA(message string, prompt string) (string, error) {
 	jsonPayload := map[string]interface{}{
 		"messages": []map[string]string{
 			{
+				"role":    "system",
+				"content": prompt},
+			{
 				"role":    "user",
-				"content": prompt + message,
+				"content": message,
 			},
 		},
 		"model":                 "moonshotai/kimi-k2-instruct-0905",

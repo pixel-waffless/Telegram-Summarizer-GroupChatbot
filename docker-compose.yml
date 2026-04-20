@@ -9,4 +9,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    volumes:
+      - sqlite_data:/app/data
     restart: unless-stopped
+
+volumes:
+  sqlite_data:
