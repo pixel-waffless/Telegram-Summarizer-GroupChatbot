@@ -181,6 +181,7 @@ func main() {
 			stats, _ := GetStats(db, chatID)
 			msg.Text = stats
 			msg.ParseMode = "Markdown"
+
 			bot.Send(msg)
 		case "clear":
 			Clear(db, chatID)
