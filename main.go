@@ -197,7 +197,7 @@ func main() {
 			msg.Text = "Prompt guardado con éxito"
 			msg.ParseMode = ""
 			bot.Send(msg)
-		case "asktest":
+		case "ask":
 			// Remove command from text
 			commandText := "/" + update.Message.Command()
 			inputText := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, commandText))
