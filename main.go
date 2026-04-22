@@ -334,7 +334,7 @@ func groqIA(message string, prompt string) (string, error) {
 				"content": message,
 			},
 		},
-		"model":                 "moonshotai/kimi-k2-instruct-0905",
+		"model":                 "groq/compound-mini",
 		"temperature":           1,
 		"max_completion_tokens": 8192,
 		"top_p":                 1,
