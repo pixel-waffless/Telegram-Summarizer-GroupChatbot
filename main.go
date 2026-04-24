@@ -203,7 +203,7 @@ func main() {
 			inputText := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, commandText))
 			input := update.Message.From.FirstName + ": " + inputText
 			prompt, err := getPromptBase(db, chatID)
-			textContext := GetFormattedMessages(db, chatID, 50)
+			textContext := GetFormattedMessages(db, chatID, 80)
 			if err != nil {
 				log.Printf("Error al obtener el prompt base: %v", err)
 				prompt = "Eres un asistente que responde preguntas de forma breve y concisa. Respondes sin omitir detalles importantes, pero sin ser demasiado extenso. El resumen debe ser fácil de leer y entender."
@@ -213,7 +213,7 @@ func main() {
 			if err == nil && compressedCtx != "" {
 				textContext = "Contexto comprimido:\n" + compressedCtx + "\n\nMensajes recientes:\n" + textContext
 			}
-			prompt += "\nEn esto se basa tu personalidad:" + prompt + "este es el contexto del chat no tienes que responder " + textContext + "a esto en base a lo anterior responde a pregunta de manera resumida: "
+			prompt +="datos de tu memoria" + textContext + "responde de manera resumida a esto: "
 
 			// Intento con GEMINI
 			answer, err := waifuSummaryGEMINI(input, prompt)
@@ -247,6 +247,15 @@ func main() {
 			bot.Send(msg)
 			// Verificar y comprimir contexto automáticamente si es necesario
 			go autoCompressContext(db, chatID)
+		case "getcontextcompressed":
+			compressedCtx, err := getCompressedContext(db, chatID)
+			if err != nil || compressedCtx == "" {
+				msg.Text = "No hay contexto comprimido disponible."
+			} else {
+				msg.Text = "Contexto comprimido:\n" + compressedCtx
+			}
+			msg.ParseMode = ""
+			bot.Send(msg)
 		default:
 			log.Println("No hay comando válido")
 		}
