@@ -66,6 +66,10 @@ func createTable(db *sql.DB) error {
 // Prompt base insert
 
 func insertPromptBase(db *sql.DB, chatID int64, prompt string) error {
+	deleteQuery := `DELETE FROM table_prompt_Base WHERE chat_id = ?`
+	if _, err := db.Exec(deleteQuery, chatID); err != nil {
+		log.Printf("Error al eliminar prompt base anterior: %v", err)
+	}
 	query := `INSERT INTO table_prompt_Base(prompt,chat_id) VALUES (?,?)`
 	_, err := db.Exec(query, prompt, chatID)
 	return err
