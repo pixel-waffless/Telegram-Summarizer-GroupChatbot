@@ -104,7 +104,7 @@ func main() {
 			// Add context from last summary
 			lastSummary, err := getLastSummary(db, chatID)
 			if err == nil && lastSummary != "" {
-				prompt += "\nPrevious conversation context: " + lastSummary
+				prompt += "\nprevio resumenes: " + lastSummary
 			}
 			// Add compressed context if exists
 			compressedCtx, err := getCompressedContext(db, chatID)
@@ -118,7 +118,7 @@ func main() {
 			}
 
 			// Try with GEMINI
-			summary, err := waifuSummaryGEMINI(textMessage, prompt)
+			summary, err := waifuSummaryGEMINI(textMessage, prompt + promptSummary)
 			if err != nil {
 				log.Printf("Error with GEMINI: %v", err)
 			}
