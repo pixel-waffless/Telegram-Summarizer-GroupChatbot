@@ -118,7 +118,7 @@ func main() {
 			}
 
 			// Try with GEMINI
-			summary, err := waifuSummaryGEMINI(textMessage, prompt + promptSummary)
+			summary, err := waifuSummaryGEMINI(textMessage, promptSummary)
 			if err != nil {
 				log.Printf("Error with GEMINI: %v", err)
 			}
