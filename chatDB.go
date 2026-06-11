@@ -113,6 +113,7 @@ func GetAll(db *sql.DB, chatID int64, limit int) []MessageMember {
 	var query string
 	var rows *sql.Rows
 	var err error
+
 	if limit > 0 {
 		query = `SELECT name, mensaje FROM table_messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?`
 		rows, err = db.Query(query, chatID, limit)
@@ -153,6 +154,8 @@ func GetFormattedMessages(db *sql.DB, chatID int64, limit int) string {
 
 	var builder strings.Builder
 	for _, msg := range messages {
+		builder.WriteString(msg.Name)
+		builder.WriteString(": ")
 		builder.WriteString(msg.Message)
 		builder.WriteString("\n")
 	}
@@ -220,5 +223,5 @@ func getTotalTokens(db *sql.DB, chatID int64) int {
 // shouldCompress checks if context compression is necessary (when reaching ~100k tokens)
 func shouldCompress(db *sql.DB, chatID int64) bool {
 	tokens := getTotalTokens(db, chatID)
-	return tokens > 100000
+	return tokens > 4000
 }

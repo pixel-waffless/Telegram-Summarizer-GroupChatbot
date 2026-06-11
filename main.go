@@ -24,6 +24,8 @@ import (
 func main() {
 	// initialize database
 	db, err := sql.Open("sqlite", "/app/data/db.db")
+	// Limit the number of open connections to 1 to prevent "database is locked" errors in SQLite
+	db.SetMaxOpenConns(1)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -44,14 +46,14 @@ func main() {
 	debugMode := os.Getenv("GO_ENV") == "development"
 
 	if botToken == "" {
-		log.Println("El TELEGRAM_BOT_TOKEN no se encontró")
+		log.Fatal("El TELEGRAM_BOT_TOKEN no se encontró")
 	}
 
 	log.Println("El TELEGRAM_BOT_TOKEN se cargó")
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalf("No se pudo iniciar el bot de Telegram: %s", maskSecret(err.Error(), botToken))
 	}
 
 	bot.Debug = debugMode
@@ -84,7 +86,7 @@ func main() {
 			message := update.Message.Text
 			insertMessage(db, chatID, MessageMember{Name: userName, Message: message})
 			// Automatically check and compress context if necessary
-			go autoCompressContext(db, chatID)
+			go CompressContext(db, chatID)
 		}
 
 		command := strings.ToLower(update.Message.Command())
@@ -151,9 +153,10 @@ func main() {
 			msg.ParseMode = ""
 			bot.Send(msg)
 			// Save summary for future context
-			insertSummary(db, chatID, summary)
-			// Clear messages after summary
-			Clear(db, chatID)
+			err = insertSummary(db, chatID, summary)
+			if err == nil {
+				Clear(db, chatID)
+			}
 		case "help":
 			media := []interface{}{
 				tgbotapi.NewInputMediaPhoto(
@@ -184,36 +187,47 @@ func main() {
 
 			bot.Send(msg)
 		case "clear":
-			Clear(db, chatID)
-			msg.Text = `Ya me auto formateé la cabeza, ahora a mimir... **Se duerme**`
+			var compressOk, err = CompressContext(db, chatID)
+			if err != nil {
+				log.Printf("Error al comprimir contexto antes de limpiar: %v", err)
+			}
+			if compressOk {
+				Clear(db, chatID)
+				msg.Text = "Contexto comprimido guardado y mensajes recientes borrados. **Se auto formatea la cabeza**"
+			}
 			bot.Send(msg)
-		case "promptbase":
+		case "setprompt":
 			if update.Message.From.ID != 7046723187 {
 				msg.Text = "No tienes permiso para usar este comando"
 				bot.Send(msg)
 				continue
 			}
-			insertPromptBase(db, chatID, update.Message.Text)
+			promptText := strings.TrimSpace(update.Message.CommandArguments())
+			if promptText == "" {
+				msg.Text = "Escribe el prompt después de /setprompt."
+				bot.Send(msg)
+				continue
+			}
+			insertPromptBase(db, chatID, promptText)
 			msg.Text = "Prompt guardado con éxito"
 			msg.ParseMode = ""
 			bot.Send(msg)
 		case "ask":
 			// Remove command from text
-			commandText := "/" + update.Message.Command()
-			inputText := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, commandText))
+			inputText := strings.TrimSpace(update.Message.CommandArguments())
 			input := update.Message.From.FirstName + ": " + inputText
 			prompt, err := getPromptBase(db, chatID)
-			textContext := GetFormattedMessages(db, chatID, 80)
+			textContext := GetFormattedMessages(db, chatID, 300)
 			if err != nil {
 				log.Printf("Error al obtener el prompt base: %v", err)
 				prompt = "Eres un asistente que responde preguntas de forma breve y concisa. Respondes sin omitir detalles importantes, pero sin ser demasiado extenso. El resumen debe ser fácil de leer y entender."
 			}
-			// Agregar contexto comprimido si existe
+			// Add compressed context if exists
 			compressedCtx, err := getCompressedContext(db, chatID)
 			if err == nil && compressedCtx != "" {
 				textContext = "Contexto comprimido:\n" + compressedCtx + "\n\nMensajes recientes:\n" + textContext
 			}
-			prompt +="datos de tu memoria" + textContext + "responde de manera resumida a esto: "
+			prompt = fmt.Sprintf(structPromptAsk, prompt, textContext, input, emojiList)
 
 			// Intento con GEMINI
 			answer, err := waifuSummaryGEMINI(input, prompt)
@@ -226,7 +240,12 @@ func main() {
 				answer, err = groqIA(input, prompt)
 				if err != nil {
 					log.Printf("Error con GROQ: %v", err)
-					waifuSummaryGIPITI(input, prompt)
+				}
+				if answer == "" {
+					answer, err = waifuSummaryGIPITI(input, prompt)
+					if err != nil {
+						log.Printf("Error con GIPITI: %v", err)
+					}
 				}
 
 				if answer == "" {
@@ -242,11 +261,27 @@ func main() {
 			} else {
 				msg.Text = answer
 			}
-
+			// Send response
 			msg.ParseMode = ""
-			bot.Send(msg)
-			// Verificar y comprimir contexto automáticamente si es necesario
-			go autoCompressContext(db, chatID)
+			sent, err := bot.Send(msg)
+
+			// Extract emoji from answer and send sticker
+			emoji := extractEmoji(answer)
+			SendStickerHandle(update, emoji, bot, chatID)
+
+			// Save context of the question and answer
+			if err == nil {
+				insertMessage(db, chatID, MessageMember{
+					Name:    bot.Self.FirstName,
+					Message: sent.Text,
+				})
+			}
+
+			// Verify if context needs compression after answering
+			var compressOk, _ = CompressContext(db, chatID)
+			if compressOk {
+				Clear(db, chatID)
+			}
 		case "getcontextcompressed":
 			compressedCtx, err := getCompressedContext(db, chatID)
 			if err != nil || compressedCtx == "" {
@@ -257,10 +292,18 @@ func main() {
 			msg.ParseMode = ""
 			bot.Send(msg)
 		default:
-			log.Println("No hay comando válido")
+			log.Printf("Comando desconocido ignorado: /%s", command)
+			continue
 		}
 
 	}
+}
+
+func maskSecret(text string, secret string) string {
+	if secret == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, secret, "[TELEGRAM_BOT_TOKEN]")
 }
 
 // Función para llamar a la API de gemini
@@ -279,7 +322,7 @@ func waifuSummaryGEMINI(message string, prompt string) (string, error) {
 
 	result, err := client.Models.GenerateContent(
 		ctx,
-		"gemini-2.5-flash",
+		"gemini-3.1-flash-lite",
 		genai.Text(prompt+"\n\n"+message),
 		nil,
 	)
